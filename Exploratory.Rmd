@@ -1,0 +1,823 @@
+---
+title: "Main"
+author: "Daniel Vasilevko"
+date: "2026-05-02"
+output: pdf_document
+---
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(tidycensus)
+library(ggplot2)
+library(viridis)
+
+library(tigris)
+library(sf)
+```
+
+```{r}
+departments <- read.csv("departments2.csv")
+diagnosis <- read.csv("diagnosis2.csv")
+encounters <- read.csv("encounters2.csv")
+patients2 <- read.csv("patients2.csv")
+providers <- read.csv("providers2.csv" )
+social_det <- read.csv("social_determinant2.csv")
+tigercensus <- read.csv("tigercensuscodes2.csv")
+
+combined <- read.csv("df.csv")
+```
+
+# Making Geo DATA
+```{r}
+geo_data <- read.csv("geographic_data.csv")
+
+Unemployemnt <- read.csv("Unemployment_Rate.csv")
+
+clean_join <- geo_data %>%
+  inner_join(
+    Unemployemnt,
+    by = c("GEOID" = "GEOID")
+  )
+
+clean_join <- clean_join %>%
+  mutate(
+    Unemployment.Rate = ifelse(Unemployment.Rate == "-100.00%", NA, Unemployment.Rate)
+  )
+
+#write.csv(clean_join, "geographic_data.csv", row.names = FALSE)
+
+geo_data <- read.csv("geographic_data.csv")
+
+encounters
+
+```
+
+```{r}
+combined <- read.csv("df.csv")
+
+n_distinct(patients2$DurableKey)
+
+combined
+```
+
+```{r}
+df_sorted <- combined %>%
+  mutate(Date = as.Date(Date, format = "%m/%d/%y")) %>%
+  arrange(PatientDurableKey, Date)
+
+df_sorted
+```
+
+# Generalizing The Diagnosis Values
+```{r}
+diagnosis2 <- diagnosis %>%
+  mutate(DiagnosisValue = substr(DiagnosisValue, 1, 3))
+
+diagnosis2 <- diagnosis2 %>%
+  mutate(
+    ICD_Category = case_when(
+      substr(DiagnosisValue, 1, 1) %in% c("A", "B") ~ "Infectious and parasitic diseases",
+      substr(DiagnosisValue, 1, 1) == "C" ~ "Neoplasms (cancers)",
+      substr(DiagnosisValue, 1, 1) == "D" ~ "Neoplasms, Blood, Blood-forming Organs",
+      substr(DiagnosisValue, 1, 1) == "E" ~ "Endocrine, nutritional, metabolic",
+      substr(DiagnosisValue, 1, 1) == "F" ~ "Mental and behavioral disorders",
+      substr(DiagnosisValue, 1, 1) == "G" ~ "Nervous system diseases",
+      substr(DiagnosisValue, 1, 1) == "H" ~ "Eye and ear diseases",
+      substr(DiagnosisValue, 1, 1) == "I" ~ "Circulatory system",
+      substr(DiagnosisValue, 1, 1) == "J" ~ "Respiratory system",
+      substr(DiagnosisValue, 1, 1) == "K" ~ "Digestive system",
+      substr(DiagnosisValue, 1, 1) == "L" ~ "Skin diseases",
+      substr(DiagnosisValue, 1, 1) == "M" ~ "Musculoskeletal system",
+      substr(DiagnosisValue, 1, 1) == "N" ~ "Genitourinary system",
+      substr(DiagnosisValue, 1, 1) == "O" ~ "Pregnancy and childbirth",
+      substr(DiagnosisValue, 1, 1) == "P" ~ "Perinatal conditions",
+      substr(DiagnosisValue, 1, 1) == "Q" ~ "Congenital conditions",
+      substr(DiagnosisValue, 1, 1) == "R" ~ "Symptoms / abnormal findings",
+      substr(DiagnosisValue, 1, 1) %in% c("S", "T") ~ "Injuries and external causes",
+      substr(DiagnosisValue, 1, 1) %in% c("V", "W", "X", "Y") ~ "External causes (accidents, injuries)",
+      substr(DiagnosisValue, 1, 1) == "Z" ~ "Factors influencing health",
+      TRUE ~ "Other / Unknown"
+    )
+  )
+
+diagnosis2
+```
+
+# Adding ICD To Each Diagnosis Key Journey Data 
+```{r}
+diagnosis_times <- read.csv("diagnosis_times.csv")
+
+diagnosis_times_large <- read.csv("diagnosis_times_large.csv")
+
+diagnosis3 <- diagnosis2 %>%
+  select(DiagnosisKey, ICD_Category)
+
+diagnosis3
+
+df_joined <- diagnosis_times_large %>%
+  left_join(
+    diagnosis3,
+    by = c("PrimaryDiagnosisKey" = "DiagnosisKey")
+  )
+
+df_joined
+
+dx_with_icd <- df_joined %>%
+  group_by(PatientDurableKey, PrimaryDiagnosisKey) %>%
+  summarise(
+    num_encounters = first(num_encounters),
+    first_date = first(first_date),
+    last_date = first(last_date),
+    ICD_Categories = list(unique(ICD_Category)),
+    .groups = "drop"
+  )
+
+
+
+```
+
+# Adding Location to Every Patient Key in Jounrey Data
+```{r}
+patients2_subset <- patients2 %>%
+  select(DurableKey, CensusBlockGroupFipsCode)
+
+patients2_subset
+
+dx_joined <- dx_with_icd_clean %>%
+  left_join(
+    patients2_subset,
+    by = c("PatientDurableKey" = "DurableKey")
+  )
+
+dx_joined %>%
+  summarise(
+    total = n(),
+    unspecified = sum(CensusBlockGroupFipsCode == "*Unspecified", na.rm = TRUE),
+    percent_unspecified = 100 * unspecified / total
+  )
+
+dx_joined
+```
+
+# Adding Information About Location in Journey Data
+```{r}
+geo_data <- read.csv("geographic_data.csv")
+
+geo_data <- geo_data %>%
+  mutate(GEOID = as.character(GEOID))
+
+dx_geo_joined <- dx_joined %>%
+  left_join(
+    geo_data,
+    by = c("CensusBlockGroupFipsCode" = "GEOID")
+  )
+
+dx_geo_joined
+```
+
+# Large Joureny
+```{r}
+df_joined2 <- diagnosis_times %>%
+  left_join(
+    diagnosis3,
+    by = c("PrimaryDiagnosisKey" = "DiagnosisKey")
+  )
+
+dx_with_icd2 <- df_joined2 %>%
+  group_by(PatientDurableKey, PrimaryDiagnosisKey) %>%
+  summarise(
+    num_encounters = first(num_encounters),
+    first_date = first(first_date),
+    last_date = first(last_date),
+    ICD_Categories = list(unique(ICD_Category)),
+    .groups = "drop"
+  )
+
+dx_with_icd2 <- dx_with_icd2 %>%
+  mutate(ICD_Categories = sapply(ICD_Categories, paste, collapse = ", "))
+
+dx_with_icd2 <- dx_with_icd2 %>%
+  left_join(
+    patients2_subset,
+    by = c("PatientDurableKey" = "DurableKey")
+  )
+
+large_journey <- dx_with_icd2 %>%
+  left_join(
+    geo_data,
+    by = c("CensusBlockGroupFipsCode" = "GEOID")
+  )
+
+```
+
+# Graphing Car Access Affect on Num Encounters
+```{r}
+journey_data <- read.csv("journey_data.csv")
+
+patient_summary <- journey_data %>%
+  group_by(PatientDurableKey) %>%
+  summarise(
+    total_encounters = sum(num_encounters, na.rm = TRUE),
+    No.Car.RATE = first(No.Car.RATE),  # assumes one geo per patient
+    .groups = "drop"
+  )
+
+patient_summary_clean <- patient_summary %>%
+  filter(
+    !is.na(No.Car.RATE),
+    !is.na(total_encounters)
+  )
+
+patient_summary_clean <- patient_summary_clean %>%
+  mutate(
+    No.Car.RATE = as.numeric(gsub("%", "", No.Car.RATE)) / 100
+  )
+
+model <- lm(total_encounters ~ No.Car.RATE, data = patient_summary_clean)
+summary(model)
+
+ggplot(patient_summary_clean, aes(x = No.Car.RATE, y = total_encounters)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    x = "No Car Rate",
+    y = "Total Encounters",
+    title = "Transportation Barriers vs Healthcare Utilization"
+  ) +
+  theme_classic()
+```
+
+# Graphing Median Income Affect on Num Encounters
+```{r}
+journey_data <- journey_data %>%
+  mutate(
+    Median.Household.Income = as.numeric(Median.Household.Income)
+  )
+
+patient_income <- journey_data %>%
+  group_by(PatientDurableKey) %>%
+  summarise(
+    total_encounters = sum(num_encounters, na.rm = TRUE),
+    income = first(Median.Household.Income),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(income))
+
+
+model1 <- lm(total_encounters ~ income, data = patient_income)
+summary(model1)
+
+library(ggplot2)
+
+ggplot(patient_income, aes(x = income, y = total_encounters)) +
+  geom_point(alpha = 0.4, color = "darkturquoise") +
+  labs(
+    x = "Median Household Income (Per Census Block)",
+    y = "Total Encounters"  )+
+  theme_classic()+
+  theme(
+  plot.background = element_rect(fill = "#fafafa", color = NA),
+  panel.background = element_rect(fill = "#fafafa", color = NA),
+
+  axis.text.x = element_text(size = 12),
+  axis.text.y = element_text(size = 12),
+
+  axis.title.x = element_text(size = 15),
+  axis.title.y = element_text(size = 15))
+```
+```{r}
+patient_income <- patient_income %>%
+  mutate(
+    income_group = cut(
+      income,
+      breaks = c(0, 20000, 40000, 60000, 80000, 100000, 120000, 150000,Inf),
+      labels = c("0-20k", "20-40k", "40-65k", "60-80k", "80-100k", "100-120k","120-150k","150K+"),
+      right = FALSE
+    )
+  )
+
+income_summary <- patient_income %>%
+  group_by(income_group) %>%
+  summarise(
+    avg_encounters = mean(total_encounters, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ggplot(income_summary, aes(x = income_group, y = avg_encounters)) +
+  geom_col(fill = "steelblue", alpha = 0.85) +
+  geom_text(
+    aes(label = round(avg_encounters, 1)),
+    vjust = -0.3,
+    size = 4
+  ) +
+  labs(
+    x = "Income Group",
+    y = "Avg Encounters",
+    title = "Healthcare Utilization by Income"
+  ) +
+  theme_classic() +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  )
+```
+
+
+# Graphing Unuemployemnt Effect on Num Encounters 
+```{r}
+journey_data 
+
+dx_geo_joined <- dx_geo_joined %>%
+  mutate(
+    Unemployment.Rate = as.numeric(gsub("%", "", Unemployment.Rate))
+  )
+
+patient_unemp <- dx_geo_joined %>%
+  group_by(PatientDurableKey) %>%
+  summarise(
+    total_encounters = sum(num_encounters, na.rm = TRUE),
+    unemployment = first(Unemployment.Rate),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(unemployment))
+
+model2 <- lm(total_encounters ~ unemployment, data = patient_unemp)
+
+summary(model2)
+```
+
+# Kansas Map
+```{r}
+ks_counties <- counties(state = "KS", cb = TRUE, class = "sf")
+ks_tracts <- tracts(state = "KS", cb = TRUE, class = "sf")
+
+ggplot(ks_counties) +
+  geom_sf(fill = "lavender", color = "black") +
+  theme_void() +
+  ggtitle("Kansas Counties")
+```
+```{r}
+building_locations <- departments %>%
+  distinct(CensusTract)
+
+building_locations <- building_locations[
+  substr(building_locations$CensusTract, 1, 2) == "20",
+]
+
+ks_centroids <- ks_tracts %>%
+  st_centroid() %>%
+  mutate(
+    GEOID = as.character(GEOID),
+    lon = st_coordinates(.)[,1],
+    lat = st_coordinates(.)[,2]
+  )
+
+building_locations <- as.character(building_locations)
+
+building_geo <- ks_centroids %>%
+  filter(GEOID %in% building_locations)
+
+building_geo
+
+clean_coords <- building_geo %>%
+  mutate(
+    lon = st_coordinates(.)[,1],
+    lat = st_coordinates(.)[,2]
+  ) %>%
+  st_drop_geometry() %>%
+    select(GEOID, lat, lon)
+
+clean_coords
+```
+```{r}
+ks_map <- tracts(state = "KS", cb = TRUE, class = "sf")
+
+coords_sf <- st_as_sf(
+  clean_coords,
+  coords = c("lon", "lat"),
+  crs = 4326
+)
+
+ggplot() +
+  geom_sf(data = ks_counties, fill = "white", color = "gray70") +
+  geom_point(
+    data = coords_sf,
+    aes(x = st_coordinates(coords_sf)[,1],
+        y = st_coordinates(coords_sf)[,2]),
+    color = "deepskyblue",
+    shape = 2,   
+    size = 2.5,
+    alpha = 0.8
+  ) +
+  coord_sf(
+    xlim = c(-97.65, -94),
+    ylim = c(37.47, 40.5),
+    expand = FALSE
+  ) +
+  theme_void() +
+  ggtitle("Kansas Census Tracts with Locations")
+```
+
+# Closest Hospital
+```{r}
+large_journey2 <- read.csv("large_journey_data.csv")
+
+patients_clean <- large_journey2 %>%
+  filter(!is.na(CENTLAT), !is.na(CENTLON))
+
+patients_sf <- st_as_sf(
+  patients_clean,
+  coords = c("CENTLON", "CENTLAT"),
+  crs = 4326
+)
+
+patients_sf <- st_transform(patients_sf, 3857)
+buildings_sf <- st_transform(coords_sf, 3857)
+
+nearest_idx <- st_nearest_feature(patients_sf, buildings_sf)
+patients_sf$nearest_building <- buildings_sf$GEOID[nearest_idx]
+
+patients_sf$distance_m <- as.numeric(
+  st_distance(patients_sf, buildings_sf[nearest_idx, ], by_element = TRUE)
+)
+
+patients_sf$distance_km <- patients_sf$distance_m / 1000
+
+Distance_journey <- st_drop_geometry(patients_sf)
+
+patients_sf <- patients_sf %>%
+  select(nearest_building, distance_m, distance_km, geometry)
+
+
+```
+```{r}
+patients_sf <- patients_sf %>%
+  mutate(
+    closeness = exp(-distance_km / 50)
+  )
+
+patients_plot <- patients_sf %>%
+  mutate(
+    lon = st_coordinates(.)[,1],
+    lat = st_coordinates(.)[,2]
+  )
+
+patients_plot <- st_transform(patients_plot, 4326)
+buildings_sf  <- st_transform(buildings_sf, 4326)
+
+
+# -----------------------------
+# 2. Extract coordinates once
+# -----------------------------
+coords <- st_coordinates(patients_plot)
+patients_plot$lon <- coords[,1]
+patients_plot$lat <- coords[,2]
+
+
+# -----------------------------
+# 3. Remove duplicates / aggregate
+# -----------------------------
+patients_plot <- patients_plot |>
+  group_by(lon, lat) |>
+  summarise(closeness = mean(closeness), .groups = "drop")
+
+patients_plot
+
+# -----------------------------
+# 4. Log-scale closeness (optional but recommended)
+# -----------------------------
+
+
+ggplot() +
+  geom_sf(data = ks_counties, fill = "#fafafa", color = "gray70") +
+
+  geom_bin2d(
+    data = patients_plot,
+    aes(x = lon, y = lat, weight = closeness),
+    bins = 250
+  ) +
+
+  scale_fill_viridis_c(
+    option = "inferno",
+    trans = "sqrt",   # 👈 key line
+    name = "Closeness"
+  ) +
+
+  geom_point(
+    data = coords_sf,
+    aes(x = st_coordinates(coords_sf)[,1],
+        y = st_coordinates(coords_sf)[,2]),
+    color = "darkturquoise",
+    shape = 2,
+    size = 1.5,
+    alpha = 0.8
+  ) +
+
+  coord_sf(
+    xlim = c(-102.5, -94),
+    ylim = c(36.5, 40.5),
+    expand = FALSE
+  ) +
+
+  theme_void()+
+  theme(
+    plot.background = element_rect(fill = "#fafafa", color = NA),
+    panel.background = element_rect(fill = "#fafafa", color = NA)
+  )
+
+
+```
+```{r}
+ggplot() +
+  geom_sf(data = ks_counties, fill = "white", color = "gray70") +
+
+  geom_bin2d(
+    data = patients_plot,
+    aes(x = lon, y = lat, weight = closeness),
+    bins = 250
+  ) +
+
+  scale_fill_viridis_c(
+    option = "inferno",
+    trans = "sqrt",   # 👈 key line
+    name = "Closeness"
+  ) +
+
+  geom_point(
+    data = coords_sf,
+    aes(x = st_coordinates(coords_sf)[,1],
+        y = st_coordinates(coords_sf)[,2]),
+    color = "darkturquoise",
+    shape = 2,
+    size = 3.5,
+    alpha = 0.8
+  ) +
+
+  coord_sf(
+    xlim = c(-98, -94),
+    ylim = c(38.2, 40.5),
+    expand = FALSE
+  ) +
+
+  theme_void()
+```
+
+# Encounters Based on Distance
+```{r}
+patient_distance <- Distance_journey %>%
+  group_by(PatientDurableKey) %>%
+  summarise(
+    total_encounters = sum(num_encounters, na.rm = TRUE),
+    distance_km = first(distance_km),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(distance_km))
+
+model_dist <- lm(total_encounters ~ distance_km, data = patient_distance)
+summary(model_dist)
+
+
+ggplot(patient_distance, aes(x = distance_km, y = total_encounters)) +
+  geom_point(alpha = 0.4, color = "darkturquoise") +
+  labs(
+    x = "Patient Distance to Nearest Facility (km)",
+    y = "Total Encounters per Patient"
+  ) +
+  theme_classic()+
+  theme(
+  plot.background = element_rect(fill = "#fafafa", color = NA),
+  panel.background = element_rect(fill = "#fafafa", color = NA),
+
+  axis.text.x = element_text(size = 14),
+  axis.text.y = element_text(size = 14),
+
+  axis.title.x = element_text(size = 16),
+  axis.title.y = element_text(size = 16)
+)
+
+
+```
+
+# Distribution of Multiple Diagnosis
+```{r}
+multiple_diagnosis <- read.csv("large_journey_data.csv")
+
+multiple_diagnosis
+
+ggplot(multiple_diagnosis, aes(x = num_encounters)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "white") +
+  labs(
+    x = "Number of Encounters (per Patient–Diagnosis)",
+    y = "Count of Patient–Diagnosis Pairs",
+    title = "Distribution of Encounters per Diagnosis Key"
+  ) +
+  theme_classic()
+
+```
+
+# Transporation Survey
+```{r}
+unique(social_det$DisplayName)
+
+transport <- social_det[social_det$DisplayName=="In the past 12 months, has lack of transportation kept you from medical appointments or from getting medications?",]
+
+patient_answers1 <- transport %>%
+  group_by(PatientDurableKey, AnswerText) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  arrange(PatientDurableKey, desc(n)) %>%
+  group_by(PatientDurableKey) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(PatientDurableKey, AnswerText)
+
+patient_totals <- large_journey2 %>%
+  group_by(PatientDurableKey) %>%
+  summarise(
+    total_encounters = sum(num_encounters, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+patient_summary <- patient_answers %>%
+  left_join(patient_totals, by = "PatientDurableKey")
+
+patient_summary
+
+model_transport_survey <- lm(total_encounters ~ AnswerText, data = patient_summary)
+summary(model_transport_survey)
+
+patient_summary %>%
+  group_by(AnswerText) %>%
+  summarise(
+    avg_encounters = mean(total_encounters, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = AnswerText, y = avg_encounters, fill = AnswerText)) +
+  geom_col(alpha = 0.9) +
+
+  # consistent color palette
+  scale_fill_manual(values = c(
+    "No" = "darkturquoise",
+    "Yes" = "#00BFC4"   # slightly deeper teal for contrast
+  )) +
+
+  geom_text(
+    aes(label = round(avg_encounters, 1)),
+    vjust = -0.3,
+    size = 5
+  ) +
+
+  labs(
+    x = "Transportation Need",
+    y = "Average Encounters per Patient"
+  ) +
+
+  theme_classic() +
+  theme(
+    plot.background = element_rect(fill = "#fafafa", color = NA),
+    panel.background = element_rect(fill = "#fafafa", color = NA),
+
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10),
+
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+
+    plot.title = element_text(size = 18, face = "bold"),
+    legend.position = "none"
+  )
+```
+
+```{r}
+diagnosis_fragmentation <- combined %>%
+  group_by(PatientDurableKey, PrimaryDiagnosisKey) %>%
+  summarise(
+    n_primary_specialty = n_distinct(PrimarySpecialty, na.rm = TRUE),
+    n_department_specialty = n_distinct(DepartmentSpecialty, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+diagnosis_fragmentation
+
+journey2 <- read.csv("journey_data.csv")
+
+journey2
+
+
+df <- diagnosis_fragmentation %>%
+  left_join(
+    patient_summary %>% select(PatientDurableKey, AnswerText),
+    by = "PatientDurableKey"
+  ) %>%
+  filter(!is.na(AnswerText))
+
+journey2_enriched <- journey2 %>%
+  left_join(df,
+    by = c("PatientDurableKey", "PrimaryDiagnosisKey")
+  )
+
+combined
+```
+
+# Primary Specialty
+```{r}
+patient_level <- df %>%
+  group_by(PatientDurableKey, AnswerText) %>%
+  summarise(
+    avg_primary_specialty = mean(n_primary_specialty, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+patient_level %>%
+  group_by(AnswerText) %>%
+  summarise(
+    mean_avg_primary_specialty = mean(avg_primary_specialty, na.rm = TRUE),
+    sd = sd(avg_primary_specialty, na.rm = TRUE),
+    n = n()
+  )
+
+ggplot(patient_level, aes(x = AnswerText, y = avg_primary_specialty, fill = AnswerText)) +
+  geom_boxplot() +
+  labs(
+    x = "Transportation Need",
+    y = "Avg # of Primary Specialization Types per Diagnosis"
+  ) +
+    stat_summary(
+    fun.data = function(x) data.frame(y = max(x) + 0.3, label = paste0(round(mean(x),3))),
+    geom = "text",
+    size = 4
+  ) +
+  theme_classic() +
+  scale_fill_manual(values = c("No" = "darkturquoise", "Yes" = "#00BFC4")) +
+  theme(legend.position = "none")+
+  theme(
+    plot.background = element_rect(fill = "#fafafa", color = NA),
+    panel.background = element_rect(fill = "#fafafa", color = NA),
+
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10),
+
+    axis.title.x = element_text(size = 12),
+    axis.title.y = element_text(size = 12),
+
+    plot.title = element_text(size = 18, face = "bold"),
+    legend.position = "none"
+  )
+```
+
+# Department
+```{r}
+patient_level_dept <- df %>%
+  group_by(PatientDurableKey, AnswerText) %>%
+  summarise(
+    avg_department_specialty = mean(n_department_specialty, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+patient_level_dept %>%
+  group_by(AnswerText) %>%
+  summarise(
+    mean_avg_department_specialty = mean(avg_department_specialty, na.rm = TRUE),
+    sd = sd(avg_department_specialty, na.rm = TRUE),
+    n = n()
+  )
+
+ggplot(patient_level_dept,
+       aes(x = AnswerText, y = avg_department_specialty, fill = AnswerText)) +
+  geom_boxplot() +
+  
+  stat_summary(
+    fun.data = function(x) data.frame(y = max(x) + 0.3, label = paste0(round(mean(x),3))),
+    geom = "text",
+    size = 4
+  ) +
+  
+  labs(
+    x = "Transportation Need",
+    y = "Avg # of Department Types per Diagnosis",
+  ) +
+  
+  theme_classic() +
+  scale_fill_manual(values = c("No" = "darkturquoise", "Yes" = "#00BFC4")) +
+  theme(legend.position = "none")+
+  theme_classic() +
+  scale_fill_manual(values = c("No" = "darkturquoise", "Yes" = "#00BFC4")) +
+  theme(legend.position = "none")+
+  theme(
+    plot.background = element_rect(fill = "#fafafa", color = NA),
+    panel.background = element_rect(fill = "#fafafa", color = NA),
+
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10),
+
+    axis.title.x = element_text(size = 12),
+    axis.title.y = element_text(size = 12),
+
+    plot.title = element_text(size = 18, face = "bold"),
+    legend.position = "none"
+  )
+
+```
+
+
+
