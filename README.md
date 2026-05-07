@@ -6,6 +6,7 @@ This repository contains an R Markdown and Jupyter notebook used for the analysi
 
 * Exploratory.Rmd - R Markdown featuring the exploratory data analysis behind this project.
 * Analysis.ipynb - Jupyter Notebook featuring the in depth analysis and categorization of fragmented care.
+* SVH_Fragmented.pdf - A PDF summarizing the results of the analysis. 
 
 # What Exploratory.Rmd Does
 
